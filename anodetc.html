@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <!-- Viewport settings for Mobile PWA -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    
+    <!-- PWA Settings -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>AI Anomaly Detector</title>
+
+    <!-- Inline Manifest for Single File PWA -->
+    <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkFJIFNlY3VyaXR5IENhbSIsCiAgInNob3J0X25hbWUiOiAiQUkgQ2FtIiwKICAic3RhcnRfdXJsIjogIi4iLAogICJkaXNwbGF5IjogInN0YW5kYWxvbmUiLAogICJiYWNrZ3JvdW5kX2NvbG9yIjogIiMwMDAwMDAiLAogICJ0aGVtZV9jb2xvciIjogIiMwMDAwMDAiLAogICJpY29ucyI6IFtdCn0=">
+    
+    <!-- Load TensorFlow.js dan Model COCO-SSD -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2"></script>
+
+    <!-- Font Digital untuk kesan CCTV -->
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            margin: 0;
+            background-color: #0d0d0d;
+            color: #00ff41; /* Hacker Green */
+            font-family: 'VT323', monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            /* Mencegah pull-to-refresh pada mobile */
+            overscroll-behavior-y: contain; 
+        }
+
+        /* Container Video & Canvas */
+        #cam-container {
+            position: relative;
+            width: 100%;
+            height: 60vh; /* Default height */
+            background: #000;
+            border-bottom: 2px solid #333;
+            overflow: hidden;
+            transition: height 0.3s ease; /* Animasi smooth saat layout berubah */
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.8;
+            transition: filter 0.5s ease;
+            transform: scaleX(1); /* Default tidak mirror */
+        }
+        
+        /* Mirror efek untuk kamera depan agar natural */
+        video.mirror {
+            transform: scaleX(-1);
+        }
+
+        /* DEFINISI FILTER WARNA - High Contrast Update */
+        .filter-normal { filter: contrast(1.2) grayscale(0.2); }
+        .filter-night { filter: sepia(1) hue-rotate(70deg) contrast(1.5) saturate(2) brightness(0.8); }
+        
+        /* Mengembalikan kontras B&W ke normal (1.1) agar lebih natural */
+        .filter-bw { filter: grayscale(100%) contrast(1.1) brightness(1.0); }
+        
+        .filter-inverse { filter: invert(100%) grayscale(100%) contrast(1.5); }
+        
+        /* UPDATE: Thermal Mode "Predator Style" yang lebih greget */
+        .filter-bluered { 
+            filter: invert(1) contrast(2.5) saturate(5) hue-rotate(200deg); 
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+
+        /* Overlay Efek CCTV */
+        .scan-line {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 10px;
+            background: rgba(0, 255, 65, 0.1);
+            animation: scan 3s linear infinite;
+            pointer-events: none;
+            z-index: 15;
+        }
+
+        .rec-indicator {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: red;
+            font-size: 1.5rem;
+            animation: blink 1s infinite;
+            z-index: 20;
+            display: none;
+        }
+
+        /* Tombol Switch Camera di pojok kiri atas */
+        .switch-cam-btn {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 30;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #00ff41;
+            color: #00ff41;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'VT323', monospace;
+            font-size: 1.2rem;
+            cursor: pointer;
+            backdrop-filter: blur(2px);
+        }
+        .switch-cam-btn:active {
+            background: #00ff41;
+            color: #000;
+        }
+
+        /* Panel Kontrol & Log */
+        #control-panel {
+            flex: 1;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            box-sizing: border-box;
+            background: #111;
+        }
+
+        .status-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        /* Header khusus untuk bagian Log */
+        .log-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 2px;
+        }
+
+        .log-title {
+            font-size: 1.2rem;
+            color: #aaa;
+        }
+
+        /* Tombol Toggle Kecil */
+        .btn-small {
+            background: transparent;
+            color: #00ff41;
+            border: 1px solid #00ff41;
+            font-family: 'VT323', monospace;
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 2px 8px;
+            text-transform: uppercase;
+        }
+        .btn-small:hover {
+            background: rgba(0, 255, 65, 0.2);
+        }
+
+        select.filter-select {
+            background: #000;
+            color: #00ff41;
+            border: 1px solid #00ff41;
+            font-family: 'VT323', monospace;
+            font-size: 1.2rem;
+            padding: 5px;
+            flex: 1;
+        }
+
+        label { font-size: 1.2rem; color: #aaa; }
+        #system-status { font-weight: bold; color: #ffff00; }
+
+        #log-container {
+            flex: 1;
+            background: #000;
+            border: 1px solid #333;
+            overflow-y: auto;
+            padding: 10px;
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+            /* Transisi untuk efek hide/show */
+            transition: all 0.3s ease;
+        }
+
+        /* Class utilitas untuk menyembunyikan elemen */
+        .hidden {
+            display: none;
+        }
+
+        .log-entry {
+            border-bottom: 1px solid #222;
+            padding: 5px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        .log-entry.alert { color: #ff3333; }
+
+        .btn-action {
+            width: 100%;
+            padding: 15px;
+            font-family: 'VT323', monospace;
+            font-size: 1.5rem;
+            border: none;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .btn-arm { background: #004400; color: #00ff41; border: 1px solid #00ff41; }
+        .btn-disarm { background: #440000; color: #ff3333; border: 1px solid #ff3333; display: none; }
+
+        @keyframes scan { 0% { top: -10%; } 100% { top: 110%; } }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0; } 100% { opacity: 1; } }
+        
+        .alarm-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 0, 0, 0.3);
+            z-index: 900;
+            display: none;
+            animation: blink 0.5s infinite;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="alarm-overlay" id="alarm-overlay"></div>
+
+    <div id="cam-container">
+        <div class="scan-line"></div>
+        <div class="rec-indicator" id="rec-dot">● REC [ARMED]</div>
+        
+        <!-- Tombol Switch Camera -->
+        <button class="switch-cam-btn" onclick="switchCamera()">[ 📷 CAM ]</button>
+        
+        <video id="video" class="filter-normal" playsinline muted autoplay></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="control-panel">
+        <div class="status-header">
+            <span>SYS: <span id="fps">0</span> FPS</span>
+            <span id="system-status">STANDBY</span>
+        </div>
+
+        <div class="control-row">
+            <label for="filter-mode">VISUAL MODE:</label>
+            <select id="filter-mode" class="filter-select" onchange="changeFilter()">
+                <option value="filter-normal">NORMAL (CCTV)</option>
+                <option value="filter-night">NIGHT VISION (HI-CONTRAST)</option>
+                <option value="filter-bw">BLACK & WHITE (HI-CONTRAST)</option>
+                <option value="filter-inverse">INVERSE B&W (HI-CONTRAST)</option>
+                <option value="filter-bluered">THERMAL (PREDATOR MODE)</option>
+            </select>
+        </div>
+
+        <!-- Header Log dengan Tombol Toggle -->
+        <div class="log-header-row">
+            <span class="log-title">> SYSTEM LOGS_</span>
+            <button id="btn-toggle-log" class="btn-small" onclick="toggleLog()">[ HIDE ]</button>
+        </div>
+
+        <div id="log-container">
+            <div class="log-entry">System initialized...</div>
+        </div>
+
+        <button class="btn-action btn-arm" id="btn-arm" onclick="toggleSystem()">ARM SYSTEM (AKTIFKAN)</button>
+        <button class="btn-action btn-disarm" id="btn-disarm" onclick="toggleSystem()">DISARM (MATIKAN)</button>
+    </div>
+
+    <script>
+        let model = null;
+        let video = document.getElementById('video');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let logContainer = document.getElementById('log-container');
+        let systemStatus = document.getElementById('system-status');
+        let alarmOverlay = document.getElementById('alarm-overlay');
+        let recDot = document.getElementById('rec-dot');
+        let btnArm = document.getElementById('btn-arm');
+        let btnDisarm = document.getElementById('btn-disarm');
+        let filterSelect = document.getElementById('filter-mode');
+        
+        // Element untuk Toggle Log
+        let btnToggleLog = document.getElementById('btn-toggle-log');
+        let camContainer = document.getElementById('cam-container');
+
+        let isArmed = false;
+        let isAlarmActive = false;
+        let lastAnomalyTime = 0;
+        let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Variabel Kamera
+        let currentStream = null;
+        let currentFacingMode = 'environment'; // Default kamera belakang
+
+        // Fungsi Toggle Log
+        function toggleLog() {
+            if (logContainer.style.display === 'none') {
+                logContainer.style.display = 'block';
+                btnToggleLog.innerText = '[ HIDE ]';
+                camContainer.style.height = '60vh';
+            } else {
+                logContainer.style.display = 'none';
+                btnToggleLog.innerText = '[ SHOW ]';
+                camContainer.style.height = '75vh';
+            }
+        }
+
+        async function loadAI() {
+            addLog("Memuat model Neural Network...");
+            try {
+                model = await cocoSsd.load();
+                addLog("Model Siap. Menghubungkan kamera...");
+                setupCamera();
+            } catch (err) {
+                addLog("Error: Gagal memuat AI.");
+                console.error(err);
+            }
+        }
+
+        // Fungsi Setup Kamera yang diperbarui untuk mendukung Switch
+        async function setupCamera() {
+            // Hentikan stream lama jika ada (untuk switch camera)
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const constraints = {
+                audio: false,
+                video: {
+                    facingMode: currentFacingMode,
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
+                }
+            };
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                currentStream = stream;
+                video.srcObject = stream;
+                
+                // Mirror efek jika kamera depan (selfie)
+                if (currentFacingMode === 'user') {
+                    video.classList.add('mirror');
+                } else {
+                    video.classList.remove('mirror');
+                }
+
+                video.onloadedmetadata = () => {
+                    video.play();
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    // Pastikan deteksi loop berjalan (hanya panggil sekali di awal)
+                    if (!video.dataset.detecting) {
+                        detectFrame();
+                        video.dataset.detecting = "true";
+                    }
+                };
+            } catch (err) {
+                addLog("Gagal akses kamera! " + err.message);
+            }
+        }
+
+        // Fungsi Ganti Kamera
+        function switchCamera() {
+            currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
+            addLog(`Switching camera to: ${currentFacingMode.toUpperCase()}`);
+            setupCamera();
+        }
+
+        function changeFilter() {
+            const selectedFilter = filterSelect.value;
+            // Kita perlu mempertahankan class 'mirror' jika ada
+            const isMirrored = video.classList.contains('mirror');
+            
+            video.className = ""; // Reset class
+            video.classList.add(selectedFilter);
+            
+            if (isMirrored) video.classList.add('mirror');
+            
+            addLog(`Visual mode changed to: ${selectedFilter.replace('filter-', '').toUpperCase()}`);
+        }
+
+        async function detectFrame() {
+            if (!model || video.paused || video.ended) {
+                requestAnimationFrame(detectFrame);
+                return;
+            }
+
+            try {
+                const predictions = await model.detect(video);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Handle mirror pada canvas context jika kamera depan
+                ctx.save();
+                if (currentFacingMode === 'user') {
+                    ctx.scale(-1, 1);
+                    ctx.translate(-canvas.width, 0);
+                }
+
+                let anomalyDetected = false;
+                let anomalyLabel = "";
+
+                predictions.forEach(prediction => {
+                    const isPerson = prediction.class === 'person';
+                    const isAnomaly = isArmed && (isPerson || prediction.score > 0.75);
+                    drawBoundingBox(prediction, isAnomaly);
+                    if (isAnomaly) {
+                        anomalyDetected = true;
+                        anomalyLabel = prediction.class;
+                    }
+                });
+                
+                ctx.restore();
+
+                if (isArmed && anomalyDetected) {
+                    triggerAlarm(anomalyLabel);
+                } else if (isAlarmActive && !anomalyDetected) {
+                    stopAlarm();
+                }
+            } catch (e) {
+                // Ignore error saat transisi kamera
+            }
+
+            requestAnimationFrame(detectFrame);
+        }
+
+        function drawBoundingBox(prediction, isAnomaly) {
+            const [x, y, width, height] = prediction.bbox;
+            const color = isAnomaly ? '#ff0000' : '#00ff41';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, width, height);
+            ctx.fillStyle = color;
+            ctx.font = "18px VT323";
+            const text = `${prediction.class.toUpperCase()} ${(prediction.score * 100).toFixed(0)}%`;
+            ctx.fillText(text, x, y - 5);
+        }
+
+        function triggerAlarm(label) {
+            const now = Date.now();
+            if (now - lastAnomalyTime > 2000) {
+                addLog(`⚠️ ANOMALY DETECTED: ${label.toUpperCase()}`, true);
+                lastAnomalyTime = now;
+                alarmOverlay.style.display = 'block';
+                playSiren();
+            }
+            isAlarmActive = true;
+        }
+
+        function stopAlarm() {
+            isAlarmActive = false;
+            alarmOverlay.style.display = 'none';
+        }
+
+        function playSiren() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.5);
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.6);
+        }
+
+        function toggleSystem() {
+            isArmed = !isArmed;
+            if (isArmed) {
+                systemStatus.innerText = "ARMED (SIAGA)";
+                systemStatus.style.color = "#ff3333";
+                btnArm.style.display = 'none';
+                btnDisarm.style.display = 'block';
+                recDot.style.display = 'block';
+                addLog("System ARMED. Monitoring active.");
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+            } else {
+                systemStatus.innerText = "STANDBY";
+                systemStatus.style.color = "#ffff00";
+                btnArm.style.display = 'block';
+                btnDisarm.style.display = 'none';
+                recDot.style.display = 'none';
+                alarmOverlay.style.display = 'none';
+                addLog("System DISARMED.");
+            }
+        }
+
+        function addLog(msg, isAlert = false) {
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = `log-entry ${isAlert ? 'alert' : ''}`;
+            div.innerText = `[${time}] ${msg}`;
+            logContainer.prepend(div);
+            if (logContainer.children.length > 50) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+
+        loadAI();
+    </script>
+</body>
+</html>
