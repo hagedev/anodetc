@@ -2,7 +2,6 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <!-- Viewport settings for Mobile PWA -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
     <!-- PWA Settings -->
@@ -12,42 +11,42 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>AI Anomaly Detector</title>
 
-    <!-- Placeholder Manifest (Akan di-update oleh Javascript di bawah agar valid) -->
-    <link id="manifest-placeholder" rel="manifest" href="">
-    <link id="apple-icon" rel="apple-touch-icon" href="">
+    <!-- Link ke Manifest Eksternal -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Ikon Apple (Opsional: Sebaiknya upload file icon.png terpisah juga) -->
+    <link rel="apple-touch-icon" href="icon.png">
 
     <!-- Load TensorFlow.js dan Model COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2"></script>
 
-    <!-- Font Digital untuk kesan CCTV -->
+    <!-- Font Digital -->
     <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
 
     <style>
         body {
             margin: 0;
             background-color: #0d0d0d;
-            color: #00ff41; /* Hacker Green */
+            color: #00ff41;
             font-family: 'VT323', monospace;
             overflow: hidden;
             display: flex;
             flex-direction: column;
             align-items: center;
             height: 100vh;
-            /* Mencegah pull-to-refresh pada mobile */
             overscroll-behavior-y: contain; 
             user-select: none;
         }
 
-        /* Container Video & Canvas */
         #cam-container {
             position: relative;
             width: 100%;
-            height: 60vh; /* Default height */
+            height: 60vh;
             background: #000;
             border-bottom: 2px solid #333;
             overflow: hidden;
-            transition: height 0.3s ease; /* Animasi smooth saat layout berubah */
+            transition: height 0.3s ease;
         }
 
         video {
@@ -56,15 +55,11 @@
             object-fit: cover;
             opacity: 0.8;
             transition: filter 0.5s ease;
-            transform: scaleX(1); /* Default tidak mirror */
+            transform: scaleX(1);
         }
         
-        /* Mirror efek untuk kamera depan agar natural */
-        video.mirror {
-            transform: scaleX(-1);
-        }
+        video.mirror { transform: scaleX(-1); }
 
-        /* DEFINISI FILTER WARNA - High Contrast Update */
         .filter-normal { filter: contrast(1.2) grayscale(0.2); }
         .filter-night { filter: sepia(1) hue-rotate(70deg) contrast(1.5) saturate(2) brightness(0.8); }
         .filter-bw { filter: grayscale(100%) contrast(1.1) brightness(1.0); }
@@ -80,7 +75,6 @@
             z-index: 10;
         }
 
-        /* Overlay Efek CCTV */
         .scan-line {
             position: absolute;
             top: 0;
@@ -104,7 +98,6 @@
             display: none;
         }
 
-        /* Tombol Switch Camera di pojok kiri atas */
         .switch-cam-btn {
             position: absolute;
             top: 20px;
@@ -120,12 +113,8 @@
             cursor: pointer;
             backdrop-filter: blur(2px);
         }
-        .switch-cam-btn:active {
-            background: #00ff41;
-            color: #000;
-        }
+        .switch-cam-btn:active { background: #00ff41; color: #000; }
 
-        /* Panel Kontrol & Log */
         #control-panel {
             flex: 1;
             width: 100%;
@@ -151,7 +140,6 @@
             align-items: center;
         }
 
-        /* Header khusus untuk bagian Log */
         .log-header-row {
             display: flex;
             justify-content: space-between;
@@ -161,12 +149,8 @@
             padding-bottom: 2px;
         }
 
-        .log-title {
-            font-size: 1.2rem;
-            color: #aaa;
-        }
+        .log-title { font-size: 1.2rem; color: #aaa; }
 
-        /* Tombol Toggle Kecil */
         .btn-small {
             background: transparent;
             color: #00ff41;
@@ -177,9 +161,7 @@
             padding: 2px 8px;
             text-transform: uppercase;
         }
-        .btn-small:hover {
-            background: rgba(0, 255, 65, 0.2);
-        }
+        .btn-small:hover { background: rgba(0, 255, 65, 0.2); }
 
         select.filter-select {
             background: #000;
@@ -243,7 +225,6 @@
             pointer-events: none;
         }
         
-        /* Install Prompt Style (Opsional, jika ingin custom install button) */
         #install-pwa-btn {
             display: none;
             margin-bottom: 10px;
@@ -265,10 +246,7 @@
     <div id="cam-container">
         <div class="scan-line"></div>
         <div class="rec-indicator" id="rec-dot">● REC [ARMED]</div>
-        
-        <!-- Tombol Switch Camera -->
         <button class="switch-cam-btn" onclick="switchCamera()">[ 📷 CAM ]</button>
-        
         <video id="video" class="filter-normal" playsinline muted autoplay></video>
         <canvas id="canvas"></canvas>
     </div>
@@ -292,7 +270,6 @@
             </select>
         </div>
 
-        <!-- Header Log dengan Tombol Toggle -->
         <div class="log-header-row">
             <span class="log-title">> SYSTEM LOGS_</span>
             <button id="btn-toggle-log" class="btn-small" onclick="toggleLog()">[ HIDE ]</button>
@@ -306,77 +283,25 @@
         <button class="btn-action btn-disarm" id="btn-disarm" onclick="toggleSystem()">DISARM (MATIKAN)</button>
     </div>
 
-    <!-- SCRIPT UTAMA -->
     <script>
-        // --- 1. SETUP PWA (MANIFEST & SERVICE WORKER) ---
-        // Kita generate ikon dan manifest secara dinamis agar 100% satu file.
-        
-        // Ikon CCTV sederhana dalam format SVG Base64
-        const iconSVG = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' style='background:%23000000'><circle cx='256' cy='256' r='200' stroke='%2300ff41' stroke-width='20' fill='none'/><circle cx='256' cy='256' r='100' fill='%2300ff41'/><rect x='236' y='40' width='40' height='60' fill='%2300ff41'/></svg>`;
-        const iconBase64 = "data:image/svg+xml;base64," + btoa(iconSVG);
-
-        // Update link manifest di head
-        const manifest = {
-            "name": "AI Anomaly Detector",
-            "short_name": "AI CCTV",
-            "start_url": "anodetc.html", 
-            "display": "standalone",
-            "background_color": "#000000",
-            "theme_color": "#000000",
-            "orientation": "portrait",
-            "icons": [
-                {
-                    "src": iconBase64,
-                    "sizes": "192x192",
-                    "type": "image/svg+xml",
-                    "purpose": "any maskable"
-                },
-                {
-                    "src": iconBase64,
-                    "sizes": "512x512",
-                    "type": "image/svg+xml",
-                    "purpose": "any maskable"
-                }
-            ]
-        };
-
-        const stringManifest = JSON.stringify(manifest);
-        const blobManifest = new Blob([stringManifest], {type: 'application/json'});
-        const manifestURL = URL.createObjectURL(blobManifest);
-        document.getElementById('manifest-placeholder').setAttribute('href', manifestURL);
-        document.getElementById('apple-icon').setAttribute('href', iconBase64);
-
-        // --- Service Worker Registration (Required for PWA) ---
-        // Menggunakan Blob trick untuk mendaftarkan SW tanpa file eksternal
+        // --- 1. SERVICE WORKER REGISTRATION ---
         if ('serviceWorker' in navigator) {
-            const swCode = `
-                self.addEventListener('install', (e) => {
-                    self.skipWaiting();
-                });
-                self.addEventListener('activate', (e) => {
-                    e.waitUntil(self.clients.claim());
-                });
-                self.addEventListener('fetch', (e) => {
-                    // Passthrough fetch (biarkan online)
-                    e.respondWith(fetch(e.request));
-                });
-            `;
-            const blobSW = new Blob([swCode], {type: 'text/javascript'});
-            const swURL = URL.createObjectURL(blobSW);
-
-            navigator.serviceWorker.register(swURL)
-                .then(() => console.log('SW Registered'))
-                .catch(err => console.log('SW Error:', err));
+            window.addEventListener('load', () => {
+                // Mendaftarkan file sw.js yang terpisah
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('SW Registered', reg))
+                    .catch(err => console.log('SW Fail', err));
+            });
         }
 
-        // --- PWA Install Prompt Logic ---
+        // --- PWA Install Logic ---
         let deferredPrompt;
         const installBtn = document.getElementById('install-pwa-btn');
 
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
-            installBtn.style.display = 'block'; // Tampilkan tombol install custom
+            installBtn.style.display = 'block';
             addLog("PWA Ready to Install!");
         });
 
@@ -392,7 +317,7 @@
             }
         }
 
-        // --- 2. LOGIKA APLIKASI (SAMA SEPERTI SEBELUMNYA) ---
+        // --- 2. APP LOGIC ---
         let model = null;
         let video = document.getElementById('video');
         let canvas = document.getElementById('canvas');
