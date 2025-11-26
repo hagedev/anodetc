@@ -12,9 +12,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>AI Anomaly Detector</title>
 
-    <!-- Inline Manifest for Single File PWA -->
-    <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkFJIFNlY3VyaXR5IENhbSIsCiAgInNob3J0X25hbWUiOiAiQUkgQ2FtIiwKICAic3RhcnRfdXJsIjogIi4iLAogICJkaXNwbGF5IjogInN0YW5kYWxvbmUiLAogICJiYWNrZ3JvdW5kX2NvbG9yIjogIiMwMDAwMDAiLAogICJ0aGVtZV9jb2xvciIjogIiMwMDAwMDAiLAogICJpY29ucyI6IFtdCn0=">
-    
+    <!-- Placeholder Manifest (Akan di-update oleh Javascript di bawah agar valid) -->
+    <link id="manifest-placeholder" rel="manifest" href="">
+    <link id="apple-icon" rel="apple-touch-icon" href="">
+
     <!-- Load TensorFlow.js dan Model COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2"></script>
@@ -35,6 +36,7 @@
             height: 100vh;
             /* Mencegah pull-to-refresh pada mobile */
             overscroll-behavior-y: contain; 
+            user-select: none;
         }
 
         /* Container Video & Canvas */
@@ -65,16 +67,9 @@
         /* DEFINISI FILTER WARNA - High Contrast Update */
         .filter-normal { filter: contrast(1.2) grayscale(0.2); }
         .filter-night { filter: sepia(1) hue-rotate(70deg) contrast(1.5) saturate(2) brightness(0.8); }
-        
-        /* Mengembalikan kontras B&W ke normal (1.1) agar lebih natural */
         .filter-bw { filter: grayscale(100%) contrast(1.1) brightness(1.0); }
-        
         .filter-inverse { filter: invert(100%) grayscale(100%) contrast(1.5); }
-        
-        /* UPDATE: Thermal Mode "Predator Style" yang lebih greget */
-        .filter-bluered { 
-            filter: invert(1) contrast(2.5) saturate(5) hue-rotate(200deg); 
-        }
+        .filter-bluered { filter: invert(1) contrast(2.5) saturate(5) hue-rotate(200deg); }
 
         canvas {
             position: absolute;
@@ -207,13 +202,7 @@
             padding: 10px;
             font-size: 1.1rem;
             margin-bottom: 10px;
-            /* Transisi untuk efek hide/show */
             transition: all 0.3s ease;
-        }
-
-        /* Class utilitas untuk menyembunyikan elemen */
-        .hidden {
-            display: none;
         }
 
         .log-entry {
@@ -253,6 +242,20 @@
             animation: blink 0.5s infinite;
             pointer-events: none;
         }
+        
+        /* Install Prompt Style (Opsional, jika ingin custom install button) */
+        #install-pwa-btn {
+            display: none;
+            margin-bottom: 10px;
+            background: #00ff41;
+            color: #000;
+            border: none;
+            padding: 10px;
+            font-family: 'VT323', monospace;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -275,6 +278,8 @@
             <span>SYS: <span id="fps">0</span> FPS</span>
             <span id="system-status">STANDBY</span>
         </div>
+
+        <button id="install-pwa-btn" onclick="installPWA()">[ INSTALL APP TO HOME ]</button>
 
         <div class="control-row">
             <label for="filter-mode">VISUAL MODE:</label>
@@ -301,7 +306,93 @@
         <button class="btn-action btn-disarm" id="btn-disarm" onclick="toggleSystem()">DISARM (MATIKAN)</button>
     </div>
 
+    <!-- SCRIPT UTAMA -->
     <script>
+        // --- 1. SETUP PWA (MANIFEST & SERVICE WORKER) ---
+        // Kita generate ikon dan manifest secara dinamis agar 100% satu file.
+        
+        // Ikon CCTV sederhana dalam format SVG Base64
+        const iconSVG = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' style='background:%23000000'><circle cx='256' cy='256' r='200' stroke='%2300ff41' stroke-width='20' fill='none'/><circle cx='256' cy='256' r='100' fill='%2300ff41'/><rect x='236' y='40' width='40' height='60' fill='%2300ff41'/></svg>`;
+        const iconBase64 = "data:image/svg+xml;base64," + btoa(iconSVG);
+
+        // Update link manifest di head
+        const manifest = {
+            "name": "AI Anomaly Detector",
+            "short_name": "AI CCTV",
+            "start_url": "anodetc.html", 
+            "display": "standalone",
+            "background_color": "#000000",
+            "theme_color": "#000000",
+            "orientation": "portrait",
+            "icons": [
+                {
+                    "src": iconBase64,
+                    "sizes": "192x192",
+                    "type": "image/svg+xml",
+                    "purpose": "any maskable"
+                },
+                {
+                    "src": iconBase64,
+                    "sizes": "512x512",
+                    "type": "image/svg+xml",
+                    "purpose": "any maskable"
+                }
+            ]
+        };
+
+        const stringManifest = JSON.stringify(manifest);
+        const blobManifest = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blobManifest);
+        document.getElementById('manifest-placeholder').setAttribute('href', manifestURL);
+        document.getElementById('apple-icon').setAttribute('href', iconBase64);
+
+        // --- Service Worker Registration (Required for PWA) ---
+        // Menggunakan Blob trick untuk mendaftarkan SW tanpa file eksternal
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                self.addEventListener('install', (e) => {
+                    self.skipWaiting();
+                });
+                self.addEventListener('activate', (e) => {
+                    e.waitUntil(self.clients.claim());
+                });
+                self.addEventListener('fetch', (e) => {
+                    // Passthrough fetch (biarkan online)
+                    e.respondWith(fetch(e.request));
+                });
+            `;
+            const blobSW = new Blob([swCode], {type: 'text/javascript'});
+            const swURL = URL.createObjectURL(blobSW);
+
+            navigator.serviceWorker.register(swURL)
+                .then(() => console.log('SW Registered'))
+                .catch(err => console.log('SW Error:', err));
+        }
+
+        // --- PWA Install Prompt Logic ---
+        let deferredPrompt;
+        const installBtn = document.getElementById('install-pwa-btn');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBtn.style.display = 'block'; // Tampilkan tombol install custom
+            addLog("PWA Ready to Install!");
+        });
+
+        async function installPWA() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    addLog("User accepted install");
+                }
+                deferredPrompt = null;
+                installBtn.style.display = 'none';
+            }
+        }
+
+        // --- 2. LOGIKA APLIKASI (SAMA SEPERTI SEBELUMNYA) ---
         let model = null;
         let video = document.getElementById('video');
         let canvas = document.getElementById('canvas');
@@ -313,8 +404,6 @@
         let btnArm = document.getElementById('btn-arm');
         let btnDisarm = document.getElementById('btn-disarm');
         let filterSelect = document.getElementById('filter-mode');
-        
-        // Element untuk Toggle Log
         let btnToggleLog = document.getElementById('btn-toggle-log');
         let camContainer = document.getElementById('cam-container');
 
@@ -322,12 +411,9 @@
         let isAlarmActive = false;
         let lastAnomalyTime = 0;
         let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-        // Variabel Kamera
         let currentStream = null;
-        let currentFacingMode = 'environment'; // Default kamera belakang
+        let currentFacingMode = 'environment';
 
-        // Fungsi Toggle Log
         function toggleLog() {
             if (logContainer.style.display === 'none') {
                 logContainer.style.display = 'block';
@@ -341,20 +427,18 @@
         }
 
         async function loadAI() {
-            addLog("Memuat model Neural Network...");
+            addLog("System Init. Loading AI Core...");
             try {
                 model = await cocoSsd.load();
-                addLog("Model Siap. Menghubungkan kamera...");
+                addLog("AI Core Online. Starting Vision...");
                 setupCamera();
             } catch (err) {
-                addLog("Error: Gagal memuat AI.");
+                addLog("Error: AI Failed Load.");
                 console.error(err);
             }
         }
 
-        // Fungsi Setup Kamera yang diperbarui untuk mendukung Switch
         async function setupCamera() {
-            // Hentikan stream lama jika ada (untuk switch camera)
             if (currentStream) {
                 currentStream.getTracks().forEach(track => track.stop());
             }
@@ -373,7 +457,6 @@
                 currentStream = stream;
                 video.srcObject = stream;
                 
-                // Mirror efek jika kamera depan (selfie)
                 if (currentFacingMode === 'user') {
                     video.classList.add('mirror');
                 } else {
@@ -384,35 +467,29 @@
                     video.play();
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
-                    // Pastikan deteksi loop berjalan (hanya panggil sekali di awal)
                     if (!video.dataset.detecting) {
                         detectFrame();
                         video.dataset.detecting = "true";
                     }
                 };
             } catch (err) {
-                addLog("Gagal akses kamera! " + err.message);
+                addLog("Camera Fail: " + err.message);
             }
         }
 
-        // Fungsi Ganti Kamera
         function switchCamera() {
             currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
-            addLog(`Switching camera to: ${currentFacingMode.toUpperCase()}`);
+            addLog(`Switching to: ${currentFacingMode.toUpperCase()}`);
             setupCamera();
         }
 
         function changeFilter() {
             const selectedFilter = filterSelect.value;
-            // Kita perlu mempertahankan class 'mirror' jika ada
             const isMirrored = video.classList.contains('mirror');
-            
-            video.className = ""; // Reset class
+            video.className = "";
             video.classList.add(selectedFilter);
-            
             if (isMirrored) video.classList.add('mirror');
-            
-            addLog(`Visual mode changed to: ${selectedFilter.replace('filter-', '').toUpperCase()}`);
+            addLog(`Mode: ${selectedFilter.replace('filter-', '').toUpperCase()}`);
         }
 
         async function detectFrame() {
@@ -420,12 +497,10 @@
                 requestAnimationFrame(detectFrame);
                 return;
             }
-
             try {
                 const predictions = await model.detect(video);
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                // Handle mirror pada canvas context jika kamera depan
                 ctx.save();
                 if (currentFacingMode === 'user') {
                     ctx.scale(-1, 1);
@@ -444,7 +519,6 @@
                         anomalyLabel = prediction.class;
                     }
                 });
-                
                 ctx.restore();
 
                 if (isArmed && anomalyDetected) {
@@ -452,10 +526,7 @@
                 } else if (isAlarmActive && !anomalyDetected) {
                     stopAlarm();
                 }
-            } catch (e) {
-                // Ignore error saat transisi kamera
-            }
-
+            } catch (e) {}
             requestAnimationFrame(detectFrame);
         }
 
@@ -474,7 +545,7 @@
         function triggerAlarm(label) {
             const now = Date.now();
             if (now - lastAnomalyTime > 2000) {
-                addLog(`⚠️ ANOMALY DETECTED: ${label.toUpperCase()}`, true);
+                addLog(`⚠️ ANOMALY: ${label.toUpperCase()}`, true);
                 lastAnomalyTime = now;
                 alarmOverlay.style.display = 'block';
                 playSiren();
@@ -510,7 +581,7 @@
                 btnArm.style.display = 'none';
                 btnDisarm.style.display = 'block';
                 recDot.style.display = 'block';
-                addLog("System ARMED. Monitoring active.");
+                addLog("System ARMED.");
                 if (audioCtx.state === 'suspended') audioCtx.resume();
             } else {
                 systemStatus.innerText = "STANDBY";
@@ -524,7 +595,7 @@
         }
 
         function addLog(msg, isAlert = false) {
-            const time = new Date().toLocaleTimeString();
+            const time = new Date().toLocaleTimeString('id-ID', {hour12: false});
             const div = document.createElement('div');
             div.className = `log-entry ${isAlert ? 'alert' : ''}`;
             div.innerText = `[${time}] ${msg}`;
