@@ -13,9 +13,7 @@
 
     <!-- Link ke Manifest Eksternal -->
     <link rel="manifest" href="manifest.json">
-    
-    <!-- Ikon Apple (Opsional: Sebaiknya upload file icon.png terpisah juga) -->
-    <link rel="apple-touch-icon" href="icon.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
 
     <!-- Load TensorFlow.js dan Model COCO-SSD -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0"></script>
@@ -98,22 +96,32 @@
             display: none;
         }
 
-        .switch-cam-btn {
+        /* Group Tombol Atas */
+        .top-controls {
             position: absolute;
             top: 20px;
             left: 20px;
             z-index: 30;
+            display: flex;
+            gap: 10px;
+        }
+
+        .cam-btn {
             background: rgba(0, 0, 0, 0.5);
             border: 1px solid #00ff41;
             color: #00ff41;
-            padding: 10px;
+            padding: 8px 12px;
             border-radius: 5px;
             font-family: 'VT323', monospace;
             font-size: 1.2rem;
             cursor: pointer;
             backdrop-filter: blur(2px);
+            text-transform: uppercase;
         }
-        .switch-cam-btn:active { background: #00ff41; color: #000; }
+        .cam-btn:active, .cam-btn.active { background: #00ff41; color: #000; }
+        
+        /* Tombol Flash disembunyikan default, muncul via JS */
+        #btn-flash { display: none; }
 
         #control-panel {
             flex: 1;
@@ -246,7 +254,13 @@
     <div id="cam-container">
         <div class="scan-line"></div>
         <div class="rec-indicator" id="rec-dot">● REC [ARMED]</div>
-        <button class="switch-cam-btn" onclick="switchCamera()">[ 📷 CAM ]</button>
+        
+        <!-- Tombol Kontrol Kamera di Atas -->
+        <div class="top-controls">
+            <button class="cam-btn" onclick="switchCamera()">[ 📷 CAM ]</button>
+            <button id="btn-flash" class="cam-btn" onclick="toggleFlash()">[ ⚡ OFF ]</button>
+        </div>
+
         <video id="video" class="filter-normal" playsinline muted autoplay></video>
         <canvas id="canvas"></canvas>
     </div>
@@ -287,10 +301,9 @@
         // --- 1. SERVICE WORKER REGISTRATION ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                // Mendaftarkan file sw.js yang terpisah
                 navigator.serviceWorker.register('sw.js')
-                    .then(reg => console.log('SW Registered', reg))
-                    .catch(err => console.log('SW Fail', err));
+                    .then(reg => console.log('SW Registered'))
+                    .catch(err => console.log('SW Fail'));
             });
         }
 
@@ -302,16 +315,12 @@
             e.preventDefault();
             deferredPrompt = e;
             installBtn.style.display = 'block';
-            addLog("PWA Ready to Install!");
         });
 
         async function installPWA() {
             if (deferredPrompt) {
                 deferredPrompt.prompt();
                 const { outcome } = await deferredPrompt.userChoice;
-                if (outcome === 'accepted') {
-                    addLog("User accepted install");
-                }
                 deferredPrompt = null;
                 installBtn.style.display = 'none';
             }
@@ -331,6 +340,7 @@
         let filterSelect = document.getElementById('filter-mode');
         let btnToggleLog = document.getElementById('btn-toggle-log');
         let camContainer = document.getElementById('cam-container');
+        let btnFlash = document.getElementById('btn-flash'); // Button Flash
 
         let isArmed = false;
         let isAlarmActive = false;
@@ -338,6 +348,10 @@
         let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let currentStream = null;
         let currentFacingMode = 'environment';
+        
+        // State Flash
+        let isFlashOn = false;
+        let hasTorch = false;
 
         function toggleLog() {
             if (logContainer.style.display === 'none') {
@@ -364,7 +378,10 @@
         }
 
         async function setupCamera() {
+            // Matikan stream lama & reset flash
             if (currentStream) {
+                isFlashOn = false; 
+                btnFlash.style.display = 'none'; // Sembunyikan dulu
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
@@ -382,8 +399,30 @@
                 currentStream = stream;
                 video.srcObject = stream;
                 
+                // Cek Capabilities (Apakah punya Flash?)
+                const track = stream.getVideoTracks()[0];
+                try {
+                    // getCapabilities mungkin tidak disupport semua browser
+                    const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+                    
+                    // Cek 'torch' dan pastikan di kamera belakang
+                    if (capabilities.torch && currentFacingMode === 'environment') {
+                        hasTorch = true;
+                        btnFlash.style.display = 'block';
+                        btnFlash.innerText = "[ ⚡ OFF ]";
+                        btnFlash.classList.remove('active');
+                    } else {
+                        hasTorch = false;
+                        btnFlash.style.display = 'none';
+                    }
+                } catch(e) {
+                    console.log("Torch check failed", e);
+                    btnFlash.style.display = 'none';
+                }
+
                 if (currentFacingMode === 'user') {
                     video.classList.add('mirror');
+                    btnFlash.style.display = 'none'; // Pastikan hidden jika selfie
                 } else {
                     video.classList.remove('mirror');
                 }
@@ -399,6 +438,33 @@
                 };
             } catch (err) {
                 addLog("Camera Fail: " + err.message);
+            }
+        }
+
+        async function toggleFlash() {
+            if (!currentStream) return;
+            const track = currentStream.getVideoTracks()[0];
+            
+            isFlashOn = !isFlashOn; // Toggle state
+            
+            try {
+                await track.applyConstraints({
+                    advanced: [{ torch: isFlashOn }]
+                });
+                
+                // Update UI Button
+                if (isFlashOn) {
+                    btnFlash.innerText = "[ ⚡ ON ]";
+                    btnFlash.classList.add('active');
+                    addLog("Flashlight: ON");
+                } else {
+                    btnFlash.innerText = "[ ⚡ OFF ]";
+                    btnFlash.classList.remove('active');
+                    addLog("Flashlight: OFF");
+                }
+            } catch (err) {
+                addLog("Flash Error: " + err.message);
+                isFlashOn = !isFlashOn; // Revert state jika gagal
             }
         }
 
@@ -501,7 +567,7 @@
         function toggleSystem() {
             isArmed = !isArmed;
             if (isArmed) {
-                systemStatus.innerText = "ARMED (SIAGA)";
+        systemStatus.innerText = "ARMED (SIAGA)";
                 systemStatus.style.color = "#ff3333";
                 btnArm.style.display = 'none';
                 btnDisarm.style.display = 'block';
