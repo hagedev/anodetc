@@ -96,7 +96,6 @@
             display: none;
         }
 
-        /* Group Tombol Atas */
         .top-controls {
             position: absolute;
             top: 20px;
@@ -120,7 +119,6 @@
         }
         .cam-btn:active, .cam-btn.active { background: #00ff41; color: #000; }
         
-        /* Tombol Flash disembunyikan default, muncul via JS */
         #btn-flash { display: none; }
 
         #control-panel {
@@ -202,6 +200,7 @@
             justify-content: space-between;
         }
         .log-entry.alert { color: #ff3333; }
+        .log-entry.suspicious { color: #ffa500; } /* Warna Oranye untuk Suspect */
 
         .btn-action {
             width: 100%;
@@ -255,7 +254,6 @@
         <div class="scan-line"></div>
         <div class="rec-indicator" id="rec-dot">● REC [ARMED]</div>
         
-        <!-- Tombol Kontrol Kamera di Atas -->
         <div class="top-controls">
             <button class="cam-btn" onclick="switchCamera()">[ 📷 CAM ]</button>
             <button id="btn-flash" class="cam-btn" onclick="toggleFlash()">[ ⚡ OFF ]</button>
@@ -298,7 +296,7 @@
     </div>
 
     <script>
-        // --- 1. SERVICE WORKER REGISTRATION ---
+        // --- 1. SERVICE WORKER ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js')
@@ -307,7 +305,7 @@
             });
         }
 
-        // --- PWA Install Logic ---
+        // --- PWA Install ---
         let deferredPrompt;
         const installBtn = document.getElementById('install-pwa-btn');
 
@@ -340,7 +338,7 @@
         let filterSelect = document.getElementById('filter-mode');
         let btnToggleLog = document.getElementById('btn-toggle-log');
         let camContainer = document.getElementById('cam-container');
-        let btnFlash = document.getElementById('btn-flash'); // Button Flash
+        let btnFlash = document.getElementById('btn-flash');
 
         let isArmed = false;
         let isAlarmActive = false;
@@ -348,10 +346,7 @@
         let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         let currentStream = null;
         let currentFacingMode = 'environment';
-        
-        // State Flash
         let isFlashOn = false;
-        let hasTorch = false;
 
         function toggleLog() {
             if (logContainer.style.display === 'none') {
@@ -369,7 +364,7 @@
             addLog("System Init. Loading AI Core...");
             try {
                 model = await cocoSsd.load();
-                addLog("AI Core Online. Starting Vision...");
+                addLog("AI Core Online. Sensitivity: HIGH.");
                 setupCamera();
             } catch (err) {
                 addLog("Error: AI Failed Load.");
@@ -378,10 +373,9 @@
         }
 
         async function setupCamera() {
-            // Matikan stream lama & reset flash
             if (currentStream) {
                 isFlashOn = false; 
-                btnFlash.style.display = 'none'; // Sembunyikan dulu
+                btnFlash.style.display = 'none'; 
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
@@ -399,30 +393,25 @@
                 currentStream = stream;
                 video.srcObject = stream;
                 
-                // Cek Capabilities (Apakah punya Flash?)
                 const track = stream.getVideoTracks()[0];
-                try {
-                    // getCapabilities mungkin tidak disupport semua browser
-                    const capabilities = track.getCapabilities ? track.getCapabilities() : {};
-                    
-                    // Cek 'torch' dan pastikan di kamera belakang
-                    if (capabilities.torch && currentFacingMode === 'environment') {
-                        hasTorch = true;
-                        btnFlash.style.display = 'block';
-                        btnFlash.innerText = "[ ⚡ OFF ]";
-                        btnFlash.classList.remove('active');
-                    } else {
-                        hasTorch = false;
-                        btnFlash.style.display = 'none';
-                    }
-                } catch(e) {
-                    console.log("Torch check failed", e);
+                let supportsTorch = false;
+                
+                if (track.getCapabilities) {
+                    const capabilities = track.getCapabilities();
+                    if (capabilities.torch) supportsTorch = true;
+                }
+
+                if (currentFacingMode === 'environment') {
+                    btnFlash.style.display = 'block';
+                    btnFlash.innerText = "[ ⚡ OFF ]";
+                    btnFlash.classList.remove('active');
+                } else {
                     btnFlash.style.display = 'none';
                 }
 
                 if (currentFacingMode === 'user') {
                     video.classList.add('mirror');
-                    btnFlash.style.display = 'none'; // Pastikan hidden jika selfie
+                    btnFlash.style.display = 'none'; 
                 } else {
                     video.classList.remove('mirror');
                 }
@@ -444,15 +433,11 @@
         async function toggleFlash() {
             if (!currentStream) return;
             const track = currentStream.getVideoTracks()[0];
-            
-            isFlashOn = !isFlashOn; // Toggle state
-            
+            isFlashOn = !isFlashOn;
             try {
                 await track.applyConstraints({
                     advanced: [{ torch: isFlashOn }]
                 });
-                
-                // Update UI Button
                 if (isFlashOn) {
                     btnFlash.innerText = "[ ⚡ ON ]";
                     btnFlash.classList.add('active');
@@ -463,8 +448,8 @@
                     addLog("Flashlight: OFF");
                 }
             } catch (err) {
-                addLog("Flash Error: " + err.message);
-                isFlashOn = !isFlashOn; // Revert state jika gagal
+                addLog("Flash Error: Not supported.");
+                isFlashOn = !isFlashOn;
             }
         }
 
@@ -500,20 +485,35 @@
 
                 let anomalyDetected = false;
                 let anomalyLabel = "";
+                let isFaintDetection = false; // Penanda deteksi samar
 
                 predictions.forEach(prediction => {
-                    const isPerson = prediction.class === 'person';
-                    const isAnomaly = isArmed && (isPerson || prediction.score > 0.75);
-                    drawBoundingBox(prediction, isAnomaly);
+                    // FILTER UTAMA: Hanya CLASS 'person'
+                    if (prediction.class !== 'person') return;
+
+                    // MODE PARANOID / SENSITIF
+                    // 0.25 (25%) = Deteksi bayangan, objek samar, manekin, dll
+                    if (prediction.score < 0.25) return;
+
+                    // Tentukan apakah ini deteksi kuat atau samar
+                    // Jika < 55% anggap samar (bayangan/hantu)
+                    const isFaint = prediction.score < 0.55;
+
+                    // Jika sistem ARMED, apapun yang > 25% dianggap ANOMALI
+                    const isAnomaly = isArmed;
+                    
+                    drawBoundingBox(prediction, isAnomaly, isFaint);
+                    
                     if (isAnomaly) {
                         anomalyDetected = true;
                         anomalyLabel = prediction.class;
+                        if (isFaint) isFaintDetection = true;
                     }
                 });
                 ctx.restore();
 
                 if (isArmed && anomalyDetected) {
-                    triggerAlarm(anomalyLabel);
+                    triggerAlarm(anomalyLabel, isFaintDetection);
                 } else if (isAlarmActive && !anomalyDetected) {
                     stopAlarm();
                 }
@@ -521,24 +521,56 @@
             requestAnimationFrame(detectFrame);
         }
 
-        function drawBoundingBox(prediction, isAnomaly) {
+        function drawBoundingBox(prediction, isAnomaly, isFaint) {
             const [x, y, width, height] = prediction.bbox;
-            const color = isAnomaly ? '#ff0000' : '#00ff41';
+            
+            // LOGIKA WARNA:
+            // Armed + Jelas (Kuat) = MERAH
+            // Armed + Samar (Lemah) = ORANYE
+            // Unarmed (Aman) = HIJAU
+            
+            let color = '#00ff41'; // Default Hijau
+            if (isAnomaly) {
+                color = isFaint ? '#ffa500' : '#ff0000'; // Oranye atau Merah
+            }
+
+            // Garis putus-putus jika samar
+            if (isFaint) {
+                ctx.setLineDash([5, 5]); 
+            } else {
+                ctx.setLineDash([]);
+            }
+
             ctx.strokeStyle = color;
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, width, height);
+            
             ctx.fillStyle = color;
             ctx.font = "18px VT323";
-            const text = `${prediction.class.toUpperCase()} ${(prediction.score * 100).toFixed(0)}%`;
+            
+            // Label Teks
+            let labelText = "PERSON";
+            if (isFaint) labelText = "SUSPICIOUS"; // Label untuk objek samar
+            if (!isAnomaly) labelText = "HUMAN";
+
+            const text = `${labelText} ${(prediction.score * 100).toFixed(0)}%`;
             ctx.fillText(text, x, y - 5);
+            ctx.setLineDash([]); // Reset dash
         }
 
-        function triggerAlarm(label) {
+        function triggerAlarm(label, isFaint) {
             const now = Date.now();
             if (now - lastAnomalyTime > 2000) {
-                addLog(`⚠️ ANOMALY: ${label.toUpperCase()}`, true);
+                // Pesan Log Beda antara Jelas dan Samar
+                const msg = isFaint ? `⚠️ SUSPICIOUS OBJECT DETECTED!` : `🚨 INTRUDER DETECTED!`;
+                
+                addLog(msg, true, isFaint);
                 lastAnomalyTime = now;
+                
+                // Overlay ikut warna (Merah atau Oranye)
+                alarmOverlay.style.background = isFaint ? 'rgba(255, 165, 0, 0.3)' : 'rgba(255, 0, 0, 0.3)';
                 alarmOverlay.style.display = 'block';
+                
                 playSiren();
             }
             isAlarmActive = true;
@@ -567,12 +599,12 @@
         function toggleSystem() {
             isArmed = !isArmed;
             if (isArmed) {
-        systemStatus.innerText = "ARMED (SIAGA)";
+                systemStatus.innerText = "ARMED (SIAGA)";
                 systemStatus.style.color = "#ff3333";
                 btnArm.style.display = 'none';
                 btnDisarm.style.display = 'block';
                 recDot.style.display = 'block';
-                addLog("System ARMED.");
+                addLog("System ARMED. Sensitivity: HIGH.");
                 if (audioCtx.state === 'suspended') audioCtx.resume();
             } else {
                 systemStatus.innerText = "STANDBY";
@@ -585,10 +617,15 @@
             }
         }
 
-        function addLog(msg, isAlert = false) {
+        function addLog(msg, isAlert = false, isSuspicious = false) {
             const time = new Date().toLocaleTimeString('id-ID', {hour12: false});
             const div = document.createElement('div');
-            div.className = `log-entry ${isAlert ? 'alert' : ''}`;
+            
+            let className = 'log-entry';
+            if (isAlert) className += ' alert';
+            if (isSuspicious) className += ' suspicious';
+            
+            div.className = className;
             div.innerText = `[${time}] ${msg}`;
             logContainer.prepend(div);
             if (logContainer.children.length > 50) {
@@ -599,4 +636,4 @@
         loadAI();
     </script>
 </body>
-</html>
+</html>   
